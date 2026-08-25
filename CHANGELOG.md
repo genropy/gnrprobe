@@ -20,6 +20,15 @@ What changed on the way out:
 - new: `report.py`, the reading layer — the bench had raw SQL in a README;
 - the three check scripts came across whole, imports apart.
 
+Found on the way out, and it is not a detail. The bench recorded the SQLite fork
+trap as a WAL-mode problem on the same file, dodged by a venv carrying sqlite
+3.50.4. Measured properly here, the scope is wider: on sqlite 3.51.0 a forked
+child cannot open the library AT ALL once its parent has, whatever file it aims
+at, and closing the parent's handle first does not help. So `is_fork_safe()`
+asks by running it, `gnrprobe serve` refuses where the answer is no, and the
+development server — one process — became the primary target rather than the
+convenient one.
+
 What was left behind, because it is the software under test rather than the
 instrument: the bridge recipe, the recording worker, the register recorder
 mixin, the drift check.

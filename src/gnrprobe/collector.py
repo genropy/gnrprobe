@@ -23,9 +23,11 @@ for a second argument.
 
 import functools
 import os
+import sqlite3
 
 from gnrprobe import conditions as conditions_module
-from gnrprobe.archive import ARCHIVE_DIR_ENV, DEFAULT_ARCHIVE_DIR, RUN_ENV, RunArchive
+from gnrprobe.archive import (ARCHIVE_DIR_ENV, DEFAULT_ARCHIVE_DIR, RUN_ENV,
+                              RunArchive, is_fork_safe)
 from gnrprobe.http_recorder import HttpRecorder
 
 
@@ -36,8 +38,25 @@ class Probe:
         self.archive = archive
 
     @classmethod
-    def start(cls, label="dev", sitename=None, archive_dir=None, **declared):
-        archive = cls.mint(label, sitename, archive_dir, **declared)
+    def start(cls, label="dev", sitename=None, archive_dir=None, forking=False,
+              **declared):
+        """`forking` says the host will fork workers off this process.
+
+        It is asked for rather than guessed, and it is checked rather than
+        assumed: on some sqlite builds a forked child cannot open the library at
+        all once its parent has, and the worker would die on its first recorded
+        line. Refusing here costs a message; finding out later costs the run.
+        """
+        if forking and not is_fork_safe():
+            raise SystemExit(
+                "gnrprobe: this python cannot record from forked workers — "
+                "sqlite crashes in a child once the parent has opened it "
+                f"(sqlite {sqlite3.sqlite_version}, measured now, not guessed).\n"
+                "  Either run the site on a python whose sqlite is older "
+                "(3.50.4 is clean), or collect on the development server, "
+                "which is one process: gnr web serve <instance> --collect")
+        archive = cls.mint(label, sitename, archive_dir,
+                           fork_safe=not forking or is_fork_safe(), **declared)
         cls.install_register_recorder(archive)
         return cls(archive)
 

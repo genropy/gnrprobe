@@ -37,16 +37,6 @@ register recorder imports genropy, which is there by construction.
 
 ## Collect
 
-Production stack, no change to genropy:
-
-```bash
-gnrprobe serve myinstance -b 127.0.0.1:8080 -w 1 -k gthread --threads 16
-```
-
-Everything after the instance name is genropy's own `serveprod` command line:
-this adds nothing to it and takes nothing away. It prints the archive it records
-into.
-
 Development server — needs the fifteen-line flag in `genropy_patch/`, not yet
 proposed as a PR:
 
@@ -54,14 +44,45 @@ proposed as a PR:
 gnr web serve myinstance --collect
 ```
 
-The development server is the better target: it is single-process, so the
-fork-only traps do not apply, and its debug is on by default, so
-`X-GnrSqlTime` and `X-GnrSqlCount` carry real numbers instead of a measured
-zero.
+The development server is the target this tool is built around, and not for
+convenience: it is ONE process. See the fork constraint below.
+
+Production stack under gunicorn, no change to genropy:
+
+```bash
+gnrprobe serve myinstance -b 127.0.0.1:8080 -w 1 -k gthread --threads 16
+```
+
+Everything after the instance name is genropy's own `serveprod` command line:
+this adds nothing to it and takes nothing away. It prints the archive it records
+into — or it refuses, for the reason below.
 
 On macOS, `PGGSSENCMODE=disable` is mandatory whenever a process forks: libpq
 negotiating Kerberos in a forked child segfaults the worker on its first
 request.
+
+## The fork constraint
+
+**On sqlite 3.51.0 a forked child cannot open SQLite at all, once its parent
+has.** Not the same file — the library. Measured on macOS, python 3.13.2 and the
+system 3.13: 0 successes out of 10 with the parent having connected, 6 out of 6
+with a parent that never did. It arrives as SIGSEGV inside the C call, with no
+exception to catch. sqlite 3.50.4 is clean.
+
+Nothing in this code can work around it: closing the parent's handle before the
+fork does not help, and neither does giving the child a file of its own. So
+`gnrprobe serve` **asks the question by running it** — one fork, one temporary
+file, the child's exit code is the answer — and refuses with the two ways out
+rather than handing back a run whose workers die on their first recorded line:
+
+- run the site on a python whose sqlite is older, or
+- collect on the development server, which does not fork.
+
+Check where you stand:
+
+```bash
+python -c "from gnrprobe.archive import is_fork_safe; print(is_fork_safe())"
+```
 
 ## Read
 
@@ -128,8 +149,9 @@ Everything else is recorded whole, with no truncation anywhere.
 
 - **`PGGSSENCMODE=disable` on macOS** — libpq negotiating Kerberos in a forked
   child segfaults. No exception to catch.
-- **`sqlite3.connect` in a forked child** segfaults with sqlite 3.51.0 in WAL
-  mode; 3.50.4 is clean. It does not bite where nothing forks.
+- **`sqlite3.connect` in a forked child** — see the fork constraint above. The
+  bench this came from recorded it as a WAL-mode, same-file problem; it is
+  neither. It does not bite where nothing forks.
 - **A surviving register keeps you logged in.** The cookie plus the register are
   the whole identity, and the server holds no session state — so restarting the
   server alone leaves you inside the application and the trace contains no

@@ -75,7 +75,7 @@ def run_serve(options):
 
     argv = [options.instance_name] + [a for a in options.rest if a != "--"]
     probe = Probe.start(label=options.label, sitename=options.instance_name,
-                        server="gunicorn", command_line=list(argv))
+                        forking=True, server="gunicorn", command_line=list(argv))
     print(f"gnrprobe: recording run {probe.run_id} into {probe.path}")
     if not ({"-c", "--config"} & set(argv)):
         argv += ["-c", os.path.join(os.path.dirname(os.path.abspath(__file__)),
