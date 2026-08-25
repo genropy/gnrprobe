@@ -1,0 +1,57 @@
+--- a/gnrpy/gnr/web/serverwsgi.py
++++ b/gnrpy/gnr/web/serverwsgi.py
+@@ Server.__init__ — beside the other add_argument calls
+         parser.add_argument('--nodebug',
+                             dest='nodebug',
+                             action='store_true',
+                             help="Don't use werkzeug debugger")
++        parser.add_argument('--collect',
++                            dest='collect',
++                            action='store_true',
++                            help="Record every request and every site-register "
++                                 "call into a run archive (needs gnrprobe)")
+ 
+@@ Server.serve() — around the GnrWsgiSite construction
+         ssl_context = None
++        probe = self.start_probe()
+         if not self.debugpy and self.reloader and not is_running_from_reloader():
+             gnrServer = 'FakeApp'
+         else:
+             gnrServer = GnrWsgiSite(self.site_script,
+                                     site_name=site_name,
+                                     _config=self.siteconfig,
+                                     _gnrconfig=self.gnr_config,
+                                     options=self.options,
+                                     debugpy=self.debugpy)
+@@ ... after the debugger has wrapped it, so the recorder stays outermost
+             else:
+                 extra_info.append('Debug mode: Off')
++            if probe:
++                gnrServer = probe.wrap(gnrServer)
++                extra_info.append(f'Collecting into {probe.path}')
+ 
+@@ Server — a new method
++    def start_probe(self):
++        """Turn collection on, when the flag asked for it.
++
++        Before the site is built: GnrWsgiSite.__init__ forces its register into
++        existence, so the recorder has to be on the name first. Nothing is
++        imported unless the flag is there, and genropy takes no dependency.
++
++        Under --reload the parent process never serves — it builds 'FakeApp' —
++        so only the reloader child collects, and each restart is a new process
++        attaching to the same archive by path.
++        """
++        if not getattr(self.options, 'collect', False):
++            return None
++        if self.reloader and not is_running_from_reloader():
++            return None
++        try:
++            from gnrprobe.collector import Probe
++        except ImportError:
++            logger.error('--collect needs gnrprobe: pip install gnrprobe')
++            return None
++        return Probe.start(label='dev', sitename=self.site_name,
++                           server='development', host=self.options.host,
++                           port=self.options.port, debug=self.debug,
++                           reload=bool(self.reloader))
