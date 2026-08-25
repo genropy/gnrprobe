@@ -27,6 +27,11 @@ test = ["pytest"]
 [project.scripts]
 gnrprobe = "gnrprobe.cli:main"
 
+[tool.setuptools]
+# NOTICE ships with the distribution: the LICENSE is the bare LGPL text, so
+# the attribution lives only here.
+license-files = ["LICENSE", "NOTICE"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

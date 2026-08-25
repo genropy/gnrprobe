@@ -1,0 +1,16 @@
+gnrprobe
+Copyright 2026 Softwell S.r.l.
+
+Request and site-register profiler for GenroPy.
+
+This product includes software developed by Softwell S.r.l.
+
+The two recorders, the run archive and their checks were first built inside the
+legacy/bridge comparison bench of genropy-asgi (`benchmarks/compare/`) and were
+extracted here.
+
+Licensed under the GNU Lesser General Public License, version 2.1 or any later
+version — the licence GenroPy itself carries, which this tool reads and serves.
+You may obtain a copy of the License at:
+
+    https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
