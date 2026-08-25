@@ -93,17 +93,31 @@ def percentile(values, fraction):
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
 
 
-def table(headers, rows, note=None):
+def table(headers, rows, note=None, title=None):
+    """A report IS data. Rendering it is somebody else's job.
+
+    The CLI draws it as a text table; the companion's MCP application hands the
+    same dict to an agent. One source of truth for what a report contains, and
+    no second implementation of the queries behind it.
+    """
+    return {"title": title, "headers": list(headers),
+            "rows": [list(row) for row in rows], "note": note}
+
+
+def render(report):
+    """Draw a report as an aligned text table."""
+    headers, rows, note = report["headers"], report["rows"], report.get("note")
+    out = [report["title"]] if report.get("title") else []
     if not rows:
-        return "  (nothing to show)"
+        return "\n".join(out + ["  (nothing to show)"])
     columns = [[str(h)] + [str(r[i]) for r in rows] for i, h in enumerate(headers)]
     widths = [max(len(cell) for cell in column) for column in columns]
-    def render(cells):
+    def draw(cells):
         return "  ".join(str(cell).ljust(widths[i]) if i == 0
                          else str(cell).rjust(widths[i])
                          for i, cell in enumerate(cells))
-    out = [render(headers), "  ".join("-" * w for w in widths)]
-    out += [render(row) for row in rows]
+    out += [draw(headers), "  ".join("-" * w for w in widths)]
+    out += [draw(row) for row in rows]
     if note:
         out.append(f"\n  {note}")
     return "\n".join(out)
@@ -112,9 +126,6 @@ def table(headers, rows, note=None):
 def summary(run):
     """The declared conditions, and the census that says the run is whole."""
     conditions = run.conditions
-    out = ["run conditions", ""]
-    for key, value in conditions.items():
-        out.append(f"  {key:<16} {json.dumps(value) if isinstance(value, (dict, list)) else value}")
     census = run.connection.execute(
         "SELECT kind, count(*) FROM record GROUP BY kind").fetchall()
     filtered = run.connection.execute(
@@ -123,8 +134,8 @@ def summary(run):
     surfaces = run.connection.execute(
         "SELECT coalesce(json_extract(line, '$.surface'), 'none'), count(*) "
         "FROM record WHERE kind = 'register' GROUP BY 1").fetchall()
-    out += ["", "census", "", table(["what", "n"],
-                                    [list(r) for r in census + filtered + surfaces])]
+    census_report = table(["what", "n"], [list(r) for r in census + filtered + surfaces],
+                          title="census")
     unjoinable = run.count(UNJOINABLE)
     orphans = run.count("SELECT count(*) FROM record WHERE kind = 'register' "
                         "AND exchange_id IS NULL")
@@ -134,15 +145,16 @@ def summary(run):
                        "WHERE json_extract(line, '$.error') IS NOT NULL")
     swallowed = run.count("SELECT count(*) FROM record "
                           "WHERE json_extract(line, '$.wire_error') IS NOT NULL")
-    out += ["", "integrity", "",
-            table(["what", "n"],
+    integrity = table(["what", "n"],
                   [["register lines naming an unknown exchange", unjoinable],
                    ["register calls belonging to no exchange", orphans],
                    ["recorder faults", faults],
                    ["errors that reached the site", errors],
                    ["failures the retry loop swallowed", swallowed]],
-                  note="the first must be 0; the second is the site's own boot")]
-    return "\n".join(out)
+                  note="the first must be 0; the second is the site's own boot",
+                  title="integrity")
+    return {"conditions": conditions, "census": census_report,
+            "integrity": integrity}
 
 
 def rpc(run):
@@ -180,7 +192,7 @@ def rpc(run):
     rows.sort(key=lambda row: row[1] * row[2], reverse=True)
     return table(["rpc method", "n", "ms p50", "ms p95", "sql ms", "sql n",
                   "xml ms", "other ms", "reg p50", "reg max", "bytes"],
-                 rows, note=TIMING_NOTE)
+                 rows, note=TIMING_NOTE, title="per RPC method")
 
 
 def register(run):
@@ -199,8 +211,9 @@ def register(run):
                      sum(1 for line in lines if line.get("wire_error")),
                      sum(1 for line in lines if line.get("error"))])
     rows.sort(key=lambda row: row[3], reverse=True)
-    return table(["verb", "surface", "n", "total ms", "ms p50", "wire", "wire max",
-                  "swallowed", "errors"], rows, note=TIMING_NOTE)
+    return table(["verb", "surface", "n", "total ms", "ms p50", "wire",
+                  "wire max", "swallowed", "errors"], rows, note=TIMING_NOTE,
+                 title="per register verb")
 
 
 def wire(run):
@@ -218,7 +231,8 @@ def wire(run):
         rows.append([line.get("verb"), line.get("surface"),
                      line.get("wire_calls"), line.get("exchange_id") or "-",
                      line.get("wire_error") or line.get("error")])
-    return table(["verb", "surface", "wire", "exchange", "failure"], rows)
+    return table(["verb", "surface", "wire", "exchange", "failure"], rows,
+                 title="failures the retry loop swallowed")
 
 
 def slow(run, limit=15):
@@ -233,7 +247,7 @@ def slow(run, limit=15):
                      line.get("status")])
     rows.sort(key=lambda row: row[2], reverse=True)
     return table(["exchange", "what", "ms", "register calls", "status"],
-                 rows[:limit], note=TIMING_NOTE)
+                 rows[:limit], note=TIMING_NOTE, title="the slowest exchanges")
 
 
 def exchange(run, exchange_id):
@@ -242,19 +256,15 @@ def exchange(run, exchange_id):
     if not http:
         raise SystemExit(f"no exchange {exchange_id} in {run.path}")
     line = http[0]
-    head = [f"{line.get('method')} {line.get('path')}"
-            f"  rpc={line.get('rpc_method')}  status={line.get('status')}"
-            f"  {line.get('duration_ms')} ms"]
-    if line.get("filtered"):
-        head.append(f"  filtered as {line['filtered']} — recorded as a stub")
     rows = []
     for call in sorted(run.lines("register", " AND exchange_id = ?", (exchange_id,)),
                        key=lambda c: c.get("ordinal") or 0):
         rows.append([call.get("ordinal"), call.get("surface"), call.get("verb"),
                      call.get("wire_calls"), round(call.get("duration_ms") or 0, 2),
                      str(call.get("args"))[:60]])
-    return "\n".join(head + ["", table(["#", "surface", "verb", "wire", "ms", "args"],
-                                       rows)])
+    return {"exchange": line,
+            "calls": table(["#", "surface", "verb", "wire", "ms", "args"], rows,
+                           title="the register conversation it caused")}
 
 
 REPORTS = {"summary": summary, "rpc": rpc, "register": register,

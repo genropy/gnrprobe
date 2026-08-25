@@ -11,6 +11,7 @@ one. The console script is the whole CLI.
 """
 
 import argparse
+import json
 import os
 import sys
 
@@ -44,6 +45,26 @@ def build_parser():
     return parser
 
 
+def render_summary(result):
+    """The one report with more than a table in it."""
+    out = ["run conditions", ""]
+    for key, value in result["conditions"].items():
+        shown = json.dumps(value) if isinstance(value, (dict, list)) else value
+        out.append(f"  {key:<16} {shown}")
+    return "\n".join(out + ["", report_module.render(result["census"]),
+                            "", report_module.render(result["integrity"])])
+
+
+def render_exchange(result):
+    line = result["exchange"]
+    head = [f"{line.get('method')} {line.get('path')}"
+            f"  rpc={line.get('rpc_method')}  status={line.get('status')}"
+            f"  {line.get('duration_ms')} ms"]
+    if line.get("filtered"):
+        head.append(f"  filtered as {line['filtered']} — recorded as a stub")
+    return "\n".join(head + ["", report_module.render(result["calls"])])
+
+
 def run_report(options):
     path = options.archive or report_module.latest_archive()
     run = report_module.Run(path)
@@ -51,13 +72,14 @@ def run_report(options):
     if options.which == "exchange":
         if not options.exchange:
             raise SystemExit("the exchange report needs --exchange <id>")
-        print(report_module.exchange(run, options.exchange))
+        print(render_exchange(report_module.exchange(run, options.exchange)))
+        return
+    if options.which == "summary":
+        print(render_summary(report_module.summary(run)))
         return
     reporter = report_module.REPORTS[options.which]
-    if options.which == "slow":
-        print(reporter(run, options.limit))
-    else:
-        print(reporter(run))
+    result = reporter(run, options.limit) if options.which == "slow" else reporter(run)
+    print(report_module.render(result))
 
 
 def run_serve(options):
