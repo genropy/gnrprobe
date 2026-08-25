@@ -33,6 +33,15 @@ def build_parser():
     read.add_argument("--exchange", help="the exchange id, for `exchange`")
     read.add_argument("--limit", type=int, default=15)
 
+    dev = verbs.add_parser(
+        "dev", help="start the development server with both recorders installed",
+        description="Everything after the instance name is genropy's own "
+                    "`gnr web serve` command line. genropy is not modified.")
+    dev.add_argument("instance_name")
+    dev.add_argument("--label", default="dev")
+    dev.add_argument("--archive-dir", default=None)
+    dev.add_argument("rest", nargs=argparse.REMAINDER)
+
     serve = verbs.add_parser(
         "serve", help="start a production site with both recorders installed",
         description="Everything after the instance name is genropy's own "
@@ -109,12 +118,15 @@ def run_serve(options):
     main()
 
 
+def run_dev(options):
+    from gnrprobe.dev_server import serve
+    serve(options.instance_name, [a for a in options.rest if a != "--"],
+          label=options.label, archive_dir=options.archive_dir)
+
+
 def main():
     options = build_parser().parse_args()
-    if options.verb == "report":
-        run_report(options)
-    else:
-        run_serve(options)
+    {"report": run_report, "dev": run_dev, "serve": run_serve}[options.verb](options)
 
 
 if __name__ == "__main__":

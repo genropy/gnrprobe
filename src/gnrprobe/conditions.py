@@ -47,12 +47,22 @@ def git_commit(path):
     return done.stdout.strip() or None
 
 
+# Newer instances keep their configuration under `config/`; older ones keep it
+# at the instance root. Both are looked for, in that order, and the first that
+# exists wins — measured on sandboxpg, which is the newer shape.
+INSTANCE_CONFIG_PATHS = ("config/instanceconfig.xml", "instanceconfig.xml")
+
+
 def instance_database(sitename):
     """The db the instance actually points at, not the one we remember."""
-    from gnr.app.gnrdeploy import PathResolver
+    from gnr.app.pathresolver import PathResolver
     from gnr.core.gnrbag import Bag
     path = PathResolver().instance_name_to_path(sitename)
-    return dict(Bag(os.path.join(path, "instanceconfig.xml")).getAttr("db") or {})
+    for relative in INSTANCE_CONFIG_PATHS:
+        config = os.path.join(path, relative)
+        if os.path.exists(config):
+            return dict(Bag(config).getAttr("db") or {})
+    raise FileNotFoundError(f"no instanceconfig.xml under {path}")
 
 
 def declare(label, sitename=None, **conditions):

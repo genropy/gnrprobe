@@ -93,6 +93,24 @@ Run the second number a few times. If it moves, that is the intermittence, and
 it is why the first number does not come from it. `GNR_PROBE_FORCE_FORK=1`
 overrides the verdict for someone who has measured their own platform properly.
 
+## What it found the first time it was pointed at a real site
+
+sandboxpg, development server, one login and three pages opened. 88 HTTP
+exchanges, 1144 register calls, no recorder faults.
+
+- Opening the application index costs **211 register calls** and 716 ms, and
+  **none of it is SQL or XML** — it is all register conversation and Python.
+- A test page with **nothing on it** costs **167** of them.
+- Across the whole run, `getItem` on a store was called **527 times to read 13
+  distinct keys**. In one empty page render, one single key —
+  `globalServices_lastChangedConfigTS.storage_gnr` — was read **54 times**, and
+  every store read costs two Pyro round trips: **108 IPC round trips for one
+  value that cannot change during a request.**
+
+None of that is visible in an HTTP log, in a profiler, or in the SQL trace. It
+is visible here because a register call is recorded next to the exchange that
+caused it.
+
 ## Read
 
 Stop the server first. While it runs, the browser's idle pings keep landing in

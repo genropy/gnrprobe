@@ -3,13 +3,28 @@
 Every number here comes out of lines already recorded — nothing is collected a
 second time, and nothing is inferred that the trace does not carry.
 
-Two honesty rules the output states rather than hides. The recorders add one
-Python indirection per HTTP exchange and one per register call, and a session
-makes roughly 1800 register calls, so ABSOLUTE latencies read high; what is
-sound is the comparison between rows of the same run. And `X-GnrSqlTime` and
-`X-GnrSqlCount` only carry real numbers when the site runs in debug — with debug
-off they arrive as a measured zero, which is why `other_ms` swallows everything
-in that case.
+THE HEADERS DO NOT SHARE A UNIT, measured on a real run rather than assumed:
+
+- `X-GnrTime` is SECONDS — `time() - t` at `gnrwsgisite.py:1378`;
+- `X-GnrXMLTime` is MILLISECONDS — `int((time()-t0)*1000)` at
+  `gnrwebpage_proxy/rpc.py:85`.
+
+Treating both as seconds turned a 4 ms serialisation into 4000 ms on the first
+real run, on a request that took 157 ms in total. An impossible number is a
+lucky bug; the same mistake on a plausible one is not.
+
+`X-GnrTime` is worth its own column: it is genropy timing ITSELF, so it excludes
+this tool's overhead. `ms p50` is the recorder's wall clock and reads high;
+`gnr ms` is what the site would have reported unrecorded.
+
+`X-GnrSqlTime` and `X-GnrSqlCount` need site debug AND the page's own
+`debug_sql` flag (`GnrWsgiSite.sqlDebugger`, `gnrwsgisite.py:1828`) — debug
+alone is not enough, measured. When they are zero the report says so instead of
+letting a reader take a zero for a fast query.
+
+The recorders add one Python indirection per exchange and one per register call,
+and a session makes roughly 1400 register calls, so ABSOLUTE latencies read
+high; what is sound is the comparison between rows of the same run.
 
 Read a run only once it is closed. While the server is up the browser's idle
 pings keep landing in the archive and any census taken earlier stops matching.
@@ -175,24 +190,35 @@ def rpc(run):
         headers = [line.get("gnr_headers") or {} for line in lines]
         def header(name, source):
             return number({k.lower(): v for k, v in source.items()}.get(name.lower()))
+        # Units, not guesses: GnrTime and GnrSqlTime in seconds, GnrXMLTime
+        # already in milliseconds. See the module docstring.
+        gnr_ms = [header("X-GnrTime", h) * 1000 for h in headers]
         sql_ms = [header("X-GnrSqlTime", h) * 1000 for h in headers]
-        xml_ms = [header("X-GnrXMLTime", h) * 1000 for h in headers]
+        xml_ms = [header("X-GnrXMLTime", h) for h in headers]
         sql_n = [header("X-GnrSqlCount", h) for h in headers]
-        other = [max(0.0, d - s - x) for d, s, x in zip(durations, sql_ms, xml_ms)]
+        # Taken off genropy's OWN time, not off the recorder's: subtracting from
+        # a wall clock that carries the instrument would charge the instrument
+        # to the page.
+        other = [max(0.0, g - s - x) for g, s, x in zip(gnr_ms, sql_ms, xml_ms)]
         calls = [per_exchange.get(line.get("exchange_id"), 0) for line in lines]
         rows.append([key, len(lines),
                      round(percentile(durations, .5), 1),
-                     round(percentile(durations, .95), 1),
+                     round(percentile(gnr_ms, .5), 1),
+                     round(percentile(gnr_ms, .95), 1),
                      round(percentile(sql_ms, .5), 1),
                      int(percentile(sql_n, .5)),
                      round(percentile(xml_ms, .5), 1),
                      round(percentile(other, .5), 1),
                      percentile(calls, .5), max(calls or [0]),
                      percentile([line.get("resp_len") or 0 for line in lines], .5)])
-    rows.sort(key=lambda row: row[1] * row[2], reverse=True)
-    return table(["rpc method", "n", "ms p50", "ms p95", "sql ms", "sql n",
-                  "xml ms", "other ms", "reg p50", "reg max", "bytes"],
-                 rows, note=TIMING_NOTE, title="per RPC method")
+    rows.sort(key=lambda row: row[1] * row[3], reverse=True)
+    note = TIMING_NOTE
+    if not any(row[5] or row[6] for row in rows):
+        note += ("\n  SQL columns are zero — they need site debug AND the "
+                 "page's own debug_sql, so `other ms` here is everything but XML")
+    return table(["rpc method", "n", "ms p50", "gnr ms", "gnr p95", "sql ms",
+                  "sql n", "xml ms", "other ms", "reg p50", "reg max", "bytes"],
+                 rows, note=note, title="per RPC method")
 
 
 def register(run):

@@ -55,13 +55,32 @@ class Probe:
                 "  Either run the site on a python whose sqlite is older "
                 "(3.50.4 is clean), or collect on the development server, "
                 "which is one process: gnr web serve <instance> --collect")
-        archive = cls.mint(label, sitename, archive_dir,
-                           fork_safe=not forking or is_fork_safe(), **declared)
+        # `forking` is what the host declared; `fork_safe` is what the platform
+        # answers. Storing `True` for a run that never forks would put a claim
+        # about the platform in the record on the strength of not having asked.
+        archive = cls.mint(label, sitename, archive_dir, forking=forking,
+                           fork_safe=is_fork_safe(), **declared)
         cls.install_register_recorder(archive)
         return cls(archive)
 
     @classmethod
     def mint(cls, label, sitename=None, archive_dir=None, **declared):
+        """Mint a run — or attach to the one this process already named.
+
+        A development server restarts itself when the source changes, and it
+        restarts by RE-EXECUTING itself: the launcher runs again, and minting
+        again would split one session across two archives and leave the newest
+        one nearly empty. Measured on sandboxpg, where a live reload cut a
+        recorded session in three.
+
+        The environment already carries the run, because a spawned worker needs
+        it there; so a path in `GNR_PROBE_RUN` that still exists is this
+        process's own run, and the answer is to attach. That also covers
+        werkzeug's reloader child, which was the case this channel was built for.
+        """
+        existing = os.environ.get(RUN_ENV)
+        if existing and os.path.exists(existing):
+            return RunArchive(existing)
         run_id = conditions_module.new_run_id(label)
         directory = (archive_dir or os.environ.get(ARCHIVE_DIR_ENV)
                      or DEFAULT_ARCHIVE_DIR)
