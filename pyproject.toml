@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Request and site-register profiler for GenroPy"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "LGPL-2.1-or-later"}
+license = {file = "LICENSE"}
 authors = [{name = "Softwell Srl", email = "info@genropy.org"}]
 classifiers = [
     "Programming Language :: Python :: 3",
