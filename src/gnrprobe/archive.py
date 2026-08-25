@@ -110,36 +110,80 @@ CREATE INDEX IF NOT EXISTS record_kind ON record (run_id, kind, subject);
 SUBJECT_FIELD = {"http": "path", "register": "verb"}
 
 
-def is_fork_safe():
-    """Can a forked child open SQLite here, once this process already has?
+# Where the breakage starts. Measured: 3.50.4 forks cleanly, 3.51.0 does not.
+FIRST_UNSAFE_SQLITE = (3, 51, 0)
 
-    Asked by running it, never by comparing version strings: the answer depends
-    on the library, the platform and the build, and a version table would be
-    wrong somewhere. One fork, one temporary file, and the child's exit code is
-    the answer. Cheap enough to ask at startup and never cached across runs.
+# For someone who measured their own platform and disagrees. It is not a way to
+# make a broken run work — it is a way to say the measurement was done.
+FORCE_FORK_ENV = "GNR_PROBE_FORCE_FORK"
+
+FORK_PROBE = """
+import os, sqlite3, sys, tempfile
+d = tempfile.mkdtemp()
+parent = sqlite3.connect(os.path.join(d, 'parent.sqlite'), isolation_level=None)
+parent.execute('PRAGMA journal_mode=WAL')
+parent.execute('CREATE TABLE t (v)')
+parent.execute("INSERT INTO t VALUES ('parent')")
+survived = 0
+for i in range({rounds}):
+    child = os.fork()
+    if child == 0:
+        try:
+            k = sqlite3.connect(os.path.join(d, 'p%d.sqlite' % i),
+                                isolation_level=None)
+            k.execute('PRAGMA journal_mode=WAL')
+            k.execute('CREATE TABLE t (v)')
+            k.execute("INSERT INTO t VALUES ('x')")
+            k.close()
+            os._exit(0)
+        except BaseException:
+            os._exit(3)
+    survived += 1 if os.waitpid(child, 0)[1] == 0 else 0
+print(survived)
+"""
+
+
+def sqlite_version():
+    return tuple(int(part) for part in sqlite3.sqlite_version.split("."))
+
+
+def is_fork_safe():
+    """Can a forked child open SQLite here, once its parent has?
+
+    Answered from the library version, and the reason is the measurement, not
+    laziness. `fork_probe` below forks a child that does exactly what a worker
+    does; on an affected python it survives SOMETIMES — a whole run of five came
+    back clean two times out of six. A gate built on that lets a doomed run
+    start on a third of its attempts, which is worse than no gate: the failure
+    then arrives as a worker dying on its first recorded line, and it reads as a
+    defect of the recorder.
+
+    The intermittence IS the finding. A platform where a forked child survives
+    four times in five cannot be recorded from either.
+    """
+    if os.environ.get(FORCE_FORK_ENV):
+        return True
+    return sqlite_version() < FIRST_UNSAFE_SQLITE
+
+
+def fork_probe(rounds=5):
+    """How many of `rounds` forked children survived. Evidence, not a gate.
+
+    Run it to see where a platform stands — and run it more than once, because
+    the answer moves. `is_fork_safe` is what decides.
     """
     import subprocess
     import sys
-    probe = ("import os,sqlite3,tempfile,sys\n"
-             "sqlite3.connect(':memory:').execute('select 1')\n"
-             "d=tempfile.mkdtemp()\n"
-             "c=os.fork()\n"
-             "if c==0:\n"
-             "    try:\n"
-             "        k=sqlite3.connect(os.path.join(d,'p.sqlite'))\n"
-             "        k.execute('PRAGMA journal_mode=WAL')\n"
-             "        k.execute('CREATE TABLE t (v)')\n"
-             "        k.close()\n"
-             "        os._exit(0)\n"
-             "    except BaseException:\n"
-             "        os._exit(3)\n"
-             "sys.exit(0 if os.waitpid(c,0)[1]==0 else 1)\n")
     try:
-        done = subprocess.run([sys.executable, "-c", probe], timeout=30,
-                              capture_output=True)
+        done = subprocess.run([sys.executable, "-c",
+                               FORK_PROBE.format(rounds=rounds)],
+                              timeout=60, capture_output=True, text=True)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0
+        return 0
+    try:
+        return int(done.stdout.strip())
+    except ValueError:
+        return 0
 
 
 # Every archive alive in this process, so the fork hook can reach them. Weak, so

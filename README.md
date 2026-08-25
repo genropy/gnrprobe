@@ -70,19 +70,28 @@ with a parent that never did. It arrives as SIGSEGV inside the C call, with no
 exception to catch. sqlite 3.50.4 is clean.
 
 Nothing in this code can work around it: closing the parent's handle before the
-fork does not help, and neither does giving the child a file of its own. So
-`gnrprobe serve` **asks the question by running it** — one fork, one temporary
-file, the child's exit code is the answer — and refuses with the two ways out
-rather than handing back a run whose workers die on their first recorded line:
+fork does not help, and neither does giving the child a file of its own.
+
+**And it is intermittent, which is the worst part.** Forking five children that
+each open their own database, three times in a row on the same machine: 5/5,
+5/5, 0/5. So the gate is NOT a probe — a probe would let a doomed run start
+about a third of the time, and the failure would then arrive as a worker dying
+on its first recorded line and read as a defect of the recorder. `gnrprobe
+serve` decides on the library version, where the measurement is stable (3.50.4
+clean, 3.51.0 not), and refuses with the two ways out:
 
 - run the site on a python whose sqlite is older, or
 - collect on the development server, which does not fork.
 
-Check where you stand:
+Check where you stand — the verdict, and the evidence behind it:
 
 ```bash
-python -c "from gnrprobe.archive import is_fork_safe; print(is_fork_safe())"
+python -c "from gnrprobe.archive import is_fork_safe, fork_probe; print(is_fork_safe(), fork_probe(), '/5 children survived')"
 ```
+
+Run the second number a few times. If it moves, that is the intermittence, and
+it is why the first number does not come from it. `GNR_PROBE_FORCE_FORK=1`
+overrides the verdict for someone who has measured their own platform properly.
 
 ## Read
 
